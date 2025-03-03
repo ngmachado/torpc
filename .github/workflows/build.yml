@@ -47,14 +47,12 @@ jobs:
             binary-name: arti_ffi.dll
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Set up Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          target: ${{ matrix.rust-target }}
-          override: true
+          targets: ${{ matrix.rust-target }}
       
       - name: Setup cross-compilation for ARM64 Linux
         if: matrix.target == 'linux-arm64'
@@ -81,7 +79,7 @@ jobs:
         shell: cmd
       
       - name: Upload binary as artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: torpc-binary-${{ matrix.target }}
           path: lib/${{ matrix.target }}/${{ matrix.binary-name }}
@@ -92,10 +90,10 @@ jobs:
     needs: build-binaries
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Download all binaries
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           path: download
       
@@ -138,7 +136,7 @@ jobs:
           EOF
       
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '18'
       
@@ -153,7 +151,7 @@ jobs:
           bun run build
       
       - name: Create package artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: torpc-package
           path: |
@@ -171,7 +169,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download package artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: torpc-package
           path: torpc-package
@@ -196,13 +194,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download package artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: torpc-package
           path: .
       
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '18'
           registry-url: 'https://registry.npmjs.org'
