@@ -1,0 +1,65 @@
+{
+    "name": "torpc",
+    "version": "0.1.0",
+    "description": "Privacy-focused RPC wrapper integrating Tor network capabilities for Web3 applications",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "build": "bun build ./src/index.ts --outdir ./dist",
+        "test": "bun test",
+        "start": "bun run src/index.ts",
+        "example": "bun run examples/basic-usage.ts",
+        "verify-tor": "bun run examples/verify-tor.ts",
+        "install-binaries": "node scripts/install_binaries.js",
+        "postinstall": "node scripts/install_binaries.js",
+        "prepublishOnly": "bun run build && node scripts/ensure_binaries.js"
+    },
+    "files": [
+        "dist/",
+        "lib/",
+        "scripts/install_binaries.js"
+    ],
+    "keywords": [
+        "tor",
+        "rpc",
+        "privacy",
+        "blockchain",
+        "web3"
+    ],
+    "author": "",
+    "license": "MIT",
+    "dependencies": {
+        "typescript": "^5.0.0",
+        "bun-types": "latest"
+    },
+    "devDependencies": {
+        "@types/node": "^20.0.0",
+        "@types/bun": "latest"
+    },
+    "peerDependencies": {
+        "typescript": "^5.0.0"
+    },
+    "module": "dist/index.js",
+    "type": "module",
+    "binary": {
+        "module_name": "arti_ffi",
+        "platforms": [
+            "darwin-x64",
+            "darwin-arm64",
+            "linux-x64",
+            "linux-arm64",
+            "win32-x64"
+        ]
+    },
+    "engines": {
+        "node": ">=16.0.0"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/ngmachado/torpc.git"
+    },
+    "bugs": {
+        "url": "https://github.com/ngmachado/torpc/issues"
+    },
+    "homepage": "https://github.com/ngmachado/torpc#readme"
+}

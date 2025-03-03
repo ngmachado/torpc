@@ -1,0 +1,35 @@
+# Basic Arti configuration for TorPC
+
+[application]
+# Whether to report our version when we build a circuit
+permit_debugging = true
+# Whether to download missing directory data if needed
+allow_missing_dir_info = true
+# How many DNS requests to allow in parallel (0 for "no limit")
+max_concurrent_dns_lookups = 0
+# How many circuits to try to build in parallel
+max_concurrent_circuit_builds = 4
+
+[network]
+# Whether to have the SOCKS port automatically fall back to another port if the
+# configured one is in use
+fallback_socks_port = true
+
+[tor_network]
+# Whether to enforce that relays have RSA identity keys (required by current Tor)
+enforce_rsa_identity_keys = true
+# Minimum number of consensus'es we want to get from the directory
+min_target_consensus_count = 2
+# How to handle consensus caching
+cache_consensus = true
+# How to handle micro-description caching
+cache_micro_desc = true
+# Default circuit and stream timeout (10 minutes)
+circuit_build_timeout = "10 minutes"
+# Allow retry if circuit fails
+retry_on_circuit_build_timeout = true
+
+[path_rules]
+# Path selection parameters
+ipv4_subnet_family_prefix = 24
+ipv6_subnet_family_prefix = 48 

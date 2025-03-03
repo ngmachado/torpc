@@ -1,0 +1,40 @@
+language = "C"
+header = "/* Arti FFI bindings for torpc */"
+include_guard = "ARTI_FFI_H"
+include_version = true
+braces = "SameLine"
+line_length = 100
+tab_width = 2
+documentation = true
+documentation_style = "auto"
+line_ending = "LF"
+style = "PascalCase"
+
+[export]
+prefix = "arti_"
+include = []
+exclude = []
+item_types = []
+renaming_overrides_prefixing = false
+
+[export.rename]
+"Circuit" = "ArtiCircuit"
+
+[define]
+"target_os = windows" = "ARTI_FFI_WINDOWS"
+"target_os = macos" = "ARTI_FFI_MACOS"
+"target_os = linux" = "ARTI_FFI_LINUX"
+
+[fn]
+rename_args = "camelCase"
+args = "auto"
+
+[enum]
+rename_variants = "ScreamingSnakeCase"
+prefix_with_name = true
+
+[parse]
+parse_deps = false
+include = []
+exclude = []
+clean = false 
