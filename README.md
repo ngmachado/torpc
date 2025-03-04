@@ -1,4 +1,4 @@
-# TorPC - Tor Privacy Connections for JavaScript
+# Torpc - Tor Privacy Connections for JavaScript
 
 TorPC is a library that allows you to make HTTP requests through the Tor network from JavaScript applications. It uses the [Arti](https://gitlab.torproject.org/tpo/core/arti) Rust implementation of Tor via FFI bindings in Bun.
 
