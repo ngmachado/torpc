@@ -1,7 +1,7 @@
 /**
  * Basic usage example for TorPC
  * 
- * This example demonstrates how to use TorPC to make HTTP requests through Tor
+ * This example demonstrates how to use TorPC to make HTTP and HTTPS requests through Tor
  */
 
 import { getArtiClient } from '../src/bindings';
@@ -18,8 +18,9 @@ const client = getArtiClient({
     configPath
 });
 
-// Circuit ID for this example
-const circuitId = `basic-example-${Date.now()}`;
+// Circuit IDs for this example
+const httpCircuitId = `http-example-${Date.now()}`;
+const httpsCircuitId = `https-example-${Date.now()}`;
 
 // Main function
 async function main() {
@@ -29,41 +30,56 @@ async function main() {
         await client.connect();
         console.log("Connected to Tor network");
 
-        // Create a circuit
-        console.log(`Creating circuit: ${circuitId}`);
-        await client.createCircuit(circuitId);
-        console.log(`Circuit created: ${circuitId}`);
+        // First, demonstrate HTTP request
+        console.log("\n=== HTTP REQUEST DEMO ===");
+
+        // Create a circuit for HTTP
+        console.log(`Creating circuit: ${httpCircuitId}`);
+        await client.createCircuit(httpCircuitId);
+        console.log(`Circuit created: ${httpCircuitId}`);
 
         // Make an HTTP request through Tor
         console.log("Making HTTP request through Tor...");
-        const response = await client.httpRequest(
-            circuitId,
+        const httpResponse = await client.httpRequest(
+            httpCircuitId,
             "http://httpbin.org/get",
             "GET",
             { "Accept": "application/json" }
         );
 
-        // Display the response
-        console.log("Response status:", response.status);
-        console.log("Response headers:", response.headers);
-        console.log("Response body:", response.body);
+        // Display the HTTP response
+        console.log("HTTP Response status:", httpResponse.status);
+        console.log("HTTP Response headers:", httpResponse.headers);
+        console.log("HTTP Response body:", httpResponse.body);
 
-        try {
-            // Try to parse the JSON response, but handle errors gracefully
-            if (response.body && response.headers["Content-Type"]?.includes("application/json")) {
-                const data = JSON.parse(response.body);
-                console.log("Parsed response:", data);
-            } else {
-                console.log("Response is not JSON or is empty.");
-            }
-        } catch (error) {
-            console.error("Error parsing JSON response:", error);
-        }
+        // Now, demonstrate HTTPS request
+        console.log("\n=== HTTPS REQUEST DEMO ===");
+
+        // Create a circuit for HTTPS
+        console.log(`Creating circuit: ${httpsCircuitId}`);
+        await client.createCircuit(httpsCircuitId);
+        console.log(`Circuit created: ${httpsCircuitId}`);
+
+        // Make an HTTPS request through Tor
+        console.log("Making HTTPS request through Tor...");
+        const httpsResponse = await client.httpRequest(
+            httpsCircuitId,
+            "https://httpbin.org/get",
+            "GET",
+            { "Accept": "application/json" }
+        );
+
+        // Display the HTTPS response
+        console.log("HTTPS Response status:", httpsResponse.status);
+        console.log("HTTPS Response headers:", httpsResponse.headers);
+        console.log("HTTPS Response body:", httpsResponse.body);
 
         // Clean up
-        console.log("Cleaning up...");
-        await client.destroyCircuit(circuitId);
-        console.log(`Circuit ${circuitId} destroyed`);
+        console.log("\nCleaning up...");
+        await client.destroyCircuit(httpCircuitId);
+        console.log(`Circuit ${httpCircuitId} destroyed`);
+        await client.destroyCircuit(httpsCircuitId);
+        console.log(`Circuit ${httpsCircuitId} destroyed`);
         await client.disconnect();
         console.log("Disconnected from Tor network");
 
@@ -73,7 +89,8 @@ async function main() {
         // Try to clean up in case of error
         try {
             if (client.isConnected()) {
-                await client.destroyCircuit(circuitId);
+                await client.destroyCircuit(httpCircuitId);
+                await client.destroyCircuit(httpsCircuitId);
                 await client.disconnect();
             }
         } catch (e) {

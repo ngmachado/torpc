@@ -91,4 +91,53 @@ int arti_read_stream(const char *stream_id, char *buffer, int buffer_len, int *b
 /// @return 1 on success, 0 on failure
 int arti_close_stream(const char *stream_id);
 
+int arti_http_request(const char *circuit_id,
+                      const char *url,
+                      const char *method,
+                      const char *headers,
+                      const char *body,
+                      char *response,
+                      int response_len);
+
+/// Connect to a target through Tor with TLS (HTTPS)
+///
+/// @param circuit_id The circuit ID to use
+/// @param host The target hostname
+/// @param port The target port
+/// @param stream_id Output parameter that will receive a null-terminated string representing the stream ID
+/// @return 1 on success, 0 on failure
+int arti_connect_tls_stream(const char *circuit_id,
+                            const char *host,
+                            int port,
+                            const char *stream_id);
+
+/// Write data to a TLS stream
+///
+/// @param stream_id A null-terminated string representing the stream ID
+/// @param data Pointer to the data to write
+/// @param data_len Length of the data
+/// @return 1 on success, 0 on failure
+int arti_tls_write(const char *stream_id, const uint8_t *data, uintptr_t data_len);
+
+/// Flush a TLS stream
+///
+/// @param stream_id A null-terminated string representing the stream ID
+/// @return 1 on success, 0 on failure
+int arti_flush_tls_stream(const char *stream_id);
+
+/// Read data from a TLS stream
+///
+/// @param stream_id A null-terminated string representing the stream ID
+/// @param buffer Pointer to the buffer to store the read data
+/// @param buffer_len Length of the buffer
+/// @param bytes_read Output parameter that will receive the number of bytes read
+/// @return 1 on success, 0 on failure
+int arti_tls_read(const char *stream_id, uint8_t *buffer, uintptr_t buffer_len);
+
+/// Close a TLS stream
+///
+/// @param stream_id A null-terminated string representing the stream ID
+/// @return 1 on success, 0 on failure
+int arti_close_tls_stream(const char *stream_id);
+
 } // extern "C"

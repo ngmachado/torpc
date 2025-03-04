@@ -18,6 +18,18 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tor_rtcompat::PreferredRuntime;
 use anyhow::{Result, anyhow};
 use lazy_static::lazy_static;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
+use tokio_rustls::{TlsConnector, rustls::ClientConfig};
+use std::sync::Arc as StdArc;
+use rustls::ServerName;
+use tokio_rustls::client::TlsStream;
+use std::str::FromStr;
+use rustls::RootCertStore;
+use webpki_roots::TLS_SERVER_ROOTS;
+use std::cell::RefCell;
+use reqwest;
+use serde_json;
 
 // Constants
 const ARTI_FFI_SUCCESS: c_int = 1;
@@ -40,6 +52,38 @@ lazy_static! {
     static ref CIRCUITS: Mutex<HashMap<String, Arc<TorClient<PreferredRuntime>>>> = Mutex::new(HashMap::new());
     static ref RUNTIME: Mutex<Option<Runtime>> = Mutex::new(None);
     static ref STREAMS: Mutex<HashMap<String, DataStream>> = Mutex::new(HashMap::new());
+    static ref TLS_CLIENT_CONFIG: StdArc<ClientConfig> = create_tls_config();
+}
+
+// Define TLS_STREAMS as a thread-local HashMap of Mutex-protected TLS streams
+thread_local! {
+    static TLS_STREAMS: RefCell<HashMap<String, StdArc<Mutex<TlsStream<DataStream>>>>> = RefCell::new(HashMap::new());
+}
+
+// Create TLS configuration with system root certificates
+fn create_tls_config() -> StdArc<ClientConfig> {
+    let mut root_store = RootCertStore::empty();
+    
+    // Add Mozilla's root certificates
+    root_store.add_server_trust_anchors(
+        webpki_roots::TLS_SERVER_ROOTS
+            .0
+            .iter()
+            .map(|ta| {
+                rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
+                    ta.subject,
+                    ta.spki,
+                    ta.name_constraints,
+                )
+            })
+    );
+    
+    let tls_config = ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    
+    StdArc::new(tls_config)
 }
 
 /// Initialize the Arti Tor client with a default configuration
@@ -614,9 +658,136 @@ pub extern "C" fn arti_close_stream(
     }
 }
 
-// Stub implementation for backward compatibility during transition
-fn http_request(_circuit_id: String, _url: String, _method: String, _headers: String, _body: String) -> Result<String> {
-    Err(anyhow!("The HTTP request function is deprecated. Use the stream-based API instead."))
+// Implement a more straightforward HTTP/HTTPS request function using reqwest
+fn http_request(circuit_id: String, url: String, method: String, headers: String, body: String) -> Result<String> {
+    // Get the Tor client for this circuit
+    let tor_client = match get_tor_client_by_circuit(&circuit_id) {
+        Some(client) => client,
+        None => return Err(anyhow!("Circuit not found")),
+    };
+    
+    // Configure the reqwest client to use the Tor SOCKS proxy
+    // We'll use the default SOCKS port 9050 since we can't easily get it from the TorClient
+    let proxy_url = "socks5://127.0.0.1:9050";
+    
+    // Create a reqwest client with the SOCKS proxy
+    let client_builder = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all(proxy_url)?)
+        .danger_accept_invalid_certs(false);  // Enforce certificate validation for HTTPS
+        
+    // Build the client
+    let client = client_builder.build()?;
+    
+    // Parse the headers
+    let headers_map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&headers)?;
+    
+    // Create the request
+    let mut request_builder = match method.to_uppercase().as_str() {
+        "GET" => client.get(&url),
+        "POST" => client.post(&url),
+        "PUT" => client.put(&url),
+        "DELETE" => client.delete(&url),
+        "HEAD" => client.head(&url),
+        "PATCH" => client.patch(&url),
+        _ => return Err(anyhow!("Unsupported HTTP method: {}", method)),
+    };
+    
+    // Add headers
+    for (key, value) in headers_map.iter() {
+        if let Some(value_str) = value.as_str() {
+            request_builder = request_builder.header(key, value_str);
+        }
+    }
+    
+    // Add body if present
+    if !body.is_empty() {
+        request_builder = request_builder.body(body);
+    }
+    
+    // Send the request and get the response using a new runtime to avoid MutexGuard issues
+    let runtime = tokio::runtime::Runtime::new()?;
+    
+    // Execute the request in the runtime
+    let response = runtime.block_on(async {
+        request_builder.send().await
+            .map_err(|e| anyhow!("Request failed: {}", e))
+    })?;
+    
+    // Get the status code
+    let status = response.status().as_u16();
+    
+    // Get the response headers
+    let response_headers = response.headers().iter()
+        .map(|(name, value)| {
+            let name_str = name.as_str();
+            let value_str = value.to_str().unwrap_or("");
+            (name_str.to_string(), value_str.to_string())
+        })
+        .collect::<std::collections::HashMap<String, String>>();
+    
+    // Read the response body
+    let response_body = runtime.block_on(async {
+        response.text().await
+            .map_err(|e| anyhow!("Failed to read response body: {}", e))
+    })?;
+    
+    // Create the response JSON
+    let response_json = serde_json::json!({
+        "status": status,
+        "headers": response_headers,
+        "body": response_body
+    });
+    
+    Ok(response_json.to_string())
+}
+
+#[no_mangle]
+pub extern "C" fn arti_http_request(
+    circuit_id: *const c_char,
+    url: *const c_char,
+    method: *const c_char,
+    headers: *const c_char,
+    body: *const c_char,
+    response: *mut c_char,
+    response_len: c_int,
+) -> c_int {
+    // Validate parameters
+    if circuit_id.is_null() || url.is_null() || method.is_null() || headers.is_null() || body.is_null() || response.is_null() {
+        return 0;
+    }
+    
+    // Convert parameters to Rust strings
+    let circuit_id_str = unsafe { CStr::from_ptr(circuit_id).to_str().unwrap_or("") }.to_string();
+    let url_str = unsafe { CStr::from_ptr(url).to_str().unwrap_or("") }.to_string();
+    let method_str = unsafe { CStr::from_ptr(method).to_str().unwrap_or("") }.to_string();
+    let headers_str = unsafe { CStr::from_ptr(headers).to_str().unwrap_or("{}") }.to_string();
+    let body_str = unsafe { CStr::from_ptr(body).to_str().unwrap_or("") }.to_string();
+    
+    // Make the HTTP request
+    match http_request(circuit_id_str, url_str, method_str, headers_str, body_str) {
+        Ok(response_str) => {
+            // Copy the response to the provided buffer
+            let response_bytes = response_str.as_bytes();
+            let max_len = response_len as usize - 1; // Leave space for null terminator
+            let copy_len = std::cmp::min(response_bytes.len(), max_len);
+            
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    response_bytes.as_ptr() as *const c_char,
+                    response,
+                    copy_len,
+                );
+                // Add null terminator
+                *response.add(copy_len) = 0;
+            }
+            
+            1
+        },
+        Err(e) => {
+            eprintln!("HTTP request failed: {:?}", e);
+            0
+        }
+    }
 }
 
 // Rust implementation functions
@@ -769,4 +940,343 @@ fn get_or_create_runtime() -> Result<&'static Mutex<Option<Runtime>>> {
 fn get_tor_client_by_circuit(circuit_id: &str) -> Option<Arc<TorClient<PreferredRuntime>>> {
     let circuits = CIRCUITS.lock().unwrap();
     circuits.get(circuit_id).cloned()
+}
+
+/// Connect to a target through Tor with TLS (HTTPS)
+///
+/// @param circuit_id The circuit ID to use
+/// @param host The target hostname
+/// @param port The target port
+/// @param stream_id Output parameter that will receive a null-terminated string representing the stream ID
+/// @return 1 on success, 0 on failure
+#[no_mangle]
+pub extern "C" fn arti_connect_tls_stream(
+    circuit_id: *const c_char,
+    host: *const c_char,
+    port: c_int,
+    stream_id: *const c_char
+) -> c_int {
+    if circuit_id.is_null() || host.is_null() || stream_id.is_null() || port <= 0 || port > 65535 {
+        eprintln!("Invalid parameters in arti_connect_tls_stream");
+        return 0;
+    }
+
+    let circuit_id_str = unsafe {
+        match CStr::from_ptr(circuit_id).to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                eprintln!("Invalid circuit ID string");
+                return 0;
+            }
+        }
+    };
+    
+    let host_str = unsafe {
+        match CStr::from_ptr(host).to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                eprintln!("Invalid host string");
+                return 0;
+            }
+        }
+    };
+    
+    let stream_id_str = unsafe {
+        match CStr::from_ptr(stream_id).to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                eprintln!("Invalid stream ID string");
+                return 0;
+            }
+        }
+    };
+    
+    let target_port = port as u16;
+
+    // Get the runtime
+    let runtime_mutex = match get_or_create_runtime() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Failed to get runtime for TLS connection: {:?}", e);
+            return 0;
+        }
+    };
+    let runtime_guard = runtime_mutex.lock().unwrap();
+    
+    if let Some(runtime) = &*runtime_guard {
+        // Get the circuit
+        let client = match get_tor_client_by_circuit(&circuit_id_str) {
+            Some(c) => c,
+            None => {
+                eprintln!("Circuit not found: {}", circuit_id_str);
+                return 0;
+            }
+        };
+
+        // Connect to the target through Tor
+        println!("DEBUG - Connecting to {}:{} through Tor with TLS", host_str, target_port);
+        
+        let result = runtime.block_on(async {
+            // First establish the basic Tor connection
+            let target = format!("{}:{}", host_str, target_port);
+            let stream = match client.connect(&target).await {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Failed to connect to target through Tor: {:?}", e);
+                    return Err(anyhow!("Connection failed"));
+                }
+            };
+            
+            // Now establish TLS connection over the Tor stream
+            let server_name = match rustls::ServerName::try_from(host_str.as_str()) {
+                Ok(n) => n,
+                Err(e) => {
+                    eprintln!("Invalid server name for TLS: {:?}", e);
+                    return Err(anyhow!("Invalid server name"));
+                }
+            };
+            
+            let connector = TlsConnector::from(StdArc::clone(&TLS_CLIENT_CONFIG));
+            
+            match connector.connect(server_name, stream).await {
+                Ok(tls_stream) => {
+                    // Store the TLS stream in thread-local storage
+                    TLS_STREAMS.with(|streams| {
+                        let mut streams_ref = streams.borrow_mut();
+                        streams_ref.insert(circuit_id_str.clone(), StdArc::new(Mutex::new(tls_stream)));
+                    });
+                    Ok(())
+                },
+                Err(e) => {
+                    eprintln!("TLS handshake failed: {:?}", e);
+                    Err(anyhow!("TLS handshake failed"))
+                }
+            }
+        });
+
+        match result {
+            Ok(_) => {
+                println!("TLS connection established: {}", stream_id_str);
+                1
+            },
+            Err(e) => {
+                eprintln!("TLS connection failed: {:?}", e);
+                0
+            }
+        }
+    } else {
+        eprintln!("Runtime not initialized");
+        0
+    }
+}
+
+/// Write data to a TLS stream
+///
+/// @param stream_id A null-terminated string representing the stream ID
+/// @param data Pointer to the data to write
+/// @param data_len Length of the data
+/// @return 1 on success, 0 on failure
+#[no_mangle]
+pub extern "C" fn arti_tls_write(
+    stream_id: *const c_char,
+    data: *const u8,
+    data_len: usize
+) -> c_int {
+    let stream_id_str = unsafe {
+        match CStr::from_ptr(stream_id).to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => return 0,
+        }
+    };
+    
+    let data_slice = unsafe { std::slice::from_raw_parts(data, data_len) };
+    
+    // Get the runtime
+    let runtime_mutex = match get_or_create_runtime() {
+        Ok(r) => r,
+        Err(_) => return 0,
+    };
+    let runtime_guard = runtime_mutex.lock().unwrap();
+    
+    if let Some(runtime) = &*runtime_guard {
+        // Get the TLS stream from thread-local storage
+        let stream_arc_option = TLS_STREAMS.with(|streams| {
+            let streams_ref = streams.borrow();
+            streams_ref.get(&stream_id_str).map(StdArc::clone)
+        });
+        
+        if let Some(stream_arc) = stream_arc_option {
+            let result = runtime.block_on(async {
+                // Get a lock on the TLS stream
+                let mut stream = stream_arc.lock().unwrap();
+                
+                // Write the data to the stream
+                match stream.write_all(data_slice).await {
+                    Ok(_) => Ok(()),
+                    Err(e) => {
+                        eprintln!("Failed to write to TLS stream: {:?}", e);
+                        Err(anyhow!("Write failed"))
+                    }
+                }
+            });
+            
+            match result {
+                Ok(_) => 1,
+                Err(_) => 0,
+            }
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
+/// Flush a TLS stream
+///
+/// @param stream_id A null-terminated string representing the stream ID
+/// @return 1 on success, 0 on failure
+#[no_mangle]
+pub extern "C" fn arti_flush_tls_stream(
+    stream_id: *const c_char
+) -> c_int {
+    let stream_id_str = unsafe {
+        match CStr::from_ptr(stream_id).to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => return 0,
+        }
+    };
+    
+    // Get the runtime
+    let runtime_mutex = match get_or_create_runtime() {
+        Ok(r) => r,
+        Err(_) => return 0,
+    };
+    let runtime_guard = runtime_mutex.lock().unwrap();
+    
+    if let Some(runtime) = &*runtime_guard {
+        // Get the TLS stream from thread-local storage
+        let stream_arc_option = TLS_STREAMS.with(|streams| {
+            let streams_ref = streams.borrow();
+            streams_ref.get(&stream_id_str).map(StdArc::clone)
+        });
+        
+        if let Some(stream_arc) = stream_arc_option {
+            let result = runtime.block_on(async {
+                // Get a lock on the TLS stream
+                let mut stream = stream_arc.lock().unwrap();
+                
+                // Flush the stream
+                match stream.flush().await {
+                    Ok(_) => Ok(()),
+                    Err(e) => {
+                        eprintln!("Failed to flush TLS stream: {:?}", e);
+                        Err(anyhow!("Flush failed"))
+                    }
+                }
+            });
+            
+            match result {
+                Ok(_) => 1,
+                Err(_) => 0,
+            }
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
+/// Read data from a TLS stream
+///
+/// @param stream_id A null-terminated string representing the stream ID
+/// @param buffer Pointer to the buffer to store the read data
+/// @param buffer_len Length of the buffer
+/// @param bytes_read Output parameter that will receive the number of bytes read
+/// @return 1 on success, 0 on failure
+#[no_mangle]
+pub extern "C" fn arti_tls_read(
+    stream_id: *const c_char,
+    buffer: *mut u8,
+    buffer_len: usize
+) -> c_int {
+    let stream_id_str = unsafe {
+        match CStr::from_ptr(stream_id).to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => return -1,
+        }
+    };
+    
+    let buffer_slice = unsafe { std::slice::from_raw_parts_mut(buffer, buffer_len) };
+    
+    // Get the runtime
+    let runtime_mutex = match get_or_create_runtime() {
+        Ok(r) => r,
+        Err(_) => return -1,
+    };
+    let runtime_guard = runtime_mutex.lock().unwrap();
+    
+    if let Some(runtime) = &*runtime_guard {
+        // Get the TLS stream from thread-local storage
+        let stream_arc_option = TLS_STREAMS.with(|streams| {
+            let streams_ref = streams.borrow();
+            streams_ref.get(&stream_id_str).map(StdArc::clone)
+        });
+        
+        if let Some(stream_arc) = stream_arc_option {
+            let result = runtime.block_on(async {
+                // Get a lock on the TLS stream
+                let mut stream = stream_arc.lock().unwrap();
+                
+                // Read data into the buffer
+                match stream.read(buffer_slice).await {
+                    Ok(n) => Ok(n),
+                    Err(e) => {
+                        eprintln!("Failed to read from TLS stream: {:?}", e);
+                        Err(anyhow!("Read failed"))
+                    }
+                }
+            });
+            
+            match result {
+                Ok(bytes_read) => bytes_read as c_int,
+                Err(_) => -1,
+            }
+        } else {
+            -1
+        }
+    } else {
+        -1
+    }
+}
+
+/// Close a TLS stream
+///
+/// @param stream_id A null-terminated string representing the stream ID
+/// @return 1 on success, 0 on failure
+#[no_mangle]
+pub extern "C" fn arti_close_tls_stream(
+    stream_id: *const c_char
+) -> c_int {
+    let stream_id_str = unsafe {
+        match CStr::from_ptr(stream_id).to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => return 0,
+        }
+    };
+
+    // Remove the stream from the map
+    let removed = TLS_STREAMS.with(|streams| {
+        let mut streams_mut = streams.borrow_mut();
+        streams_mut.remove(&stream_id_str).is_some()
+    });
+    
+    if removed {
+        println!("TLS Stream closed: {}", stream_id_str);
+        1
+    } else {
+        println!("TLS Stream not found: {}", stream_id_str);
+        0
+    }
 }

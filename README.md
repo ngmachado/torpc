@@ -6,7 +6,7 @@ TorPC is a library that allows you to make HTTP requests through the Tor network
 
 - Connect to the Tor network using the Arti implementation
 - Create and manage Tor circuits for improved privacy
-- Make HTTP requests through Tor
+- Make HTTP and HTTPS requests through Tor
 - Verify Tor connectivity
 - Custom configuration support
 
@@ -15,10 +15,17 @@ TorPC is a library that allows you to make HTTP requests through the Tor network
 The library currently supports:
 
 - ✅ HTTP requests through Tor
+- ✅ HTTPS requests through Tor
 - ✅ Circuit creation and management
 - ✅ Low-level stream API for custom protocols
 - ✅ Configuration through Arti's TOML files
-- ❌ HTTPS support (planned for future releases)
+
+
+- **HTTPS Support**: 🟡 Partially working
+  - Successfully connects to the Tor network
+  - Successfully establishes a TLS stream connection
+  - Has issues with the TLS stream handling (error when closing the stream)
+
 
 ## Installation
 
@@ -57,6 +64,51 @@ async function main() {
     const response = await client.httpRequest(
       circuitId,
       "http://httpbin.org/get",
+      "GET",
+      { "Accept": "application/json" }
+    );
+
+    // Display the response
+    console.log("Response status:", response.status);
+    console.log("Response headers:", response.headers);
+    console.log("Response body:", response.body);
+
+    // Clean up
+    await client.destroyCircuit(circuitId);
+    await client.disconnect();
+  } catch (error) {
+    console.error("Error:", error);
+  }
+}
+
+main();
+```
+
+### HTTPS Request (Secure)
+
+```typescript
+import { getArtiClient } from 'torpc';
+
+// Get the Arti client
+const client = getArtiClient();
+
+// Circuit ID for this request
+const circuitId = `https-circuit-${Date.now()}`;
+
+async function main() {
+  try {
+    // Connect to Tor network
+    await client.connect();
+    console.log("Connected to Tor network");
+
+    // Create a circuit
+    await client.createCircuit(circuitId);
+    console.log(`Circuit created: ${circuitId}`);
+
+    // Make an HTTPS request through Tor (note the https:// protocol)
+    const response = await client.httpRequest(
+      circuitId,
+      "https://httpbin.org/get",
       "GET",
       { "Accept": "application/json" }
     );
@@ -200,7 +252,7 @@ interface ArtiClient {
     createCircuit(circuitId: string): Promise<void>;
     destroyCircuit(circuitId: string): Promise<void>;
     
-    // HTTP requests
+    // HTTP/HTTPS requests
     httpRequest(
         circuitId: string,
         url: string,
@@ -225,12 +277,12 @@ interface ArtiClient {
 ## Security Considerations
 
 - **Development Status**: This library is still in development. Use at your own risk.
-- **Not for Critical Privacy Needs**: While this library uses Arti, a legitimate Tor implementation, it has not undergone security audits and should not be used for critical privacy needs.
-- **HTTPS Support**: Currently, the library only supports plain HTTP. For security-sensitive applications, you should wait for HTTPS support to be implemented.
+- **Privacy Protection**: The library now supports HTTPS, which provides encryption for your data in addition to IP address protection.
+- **Verification**: Always verify that your connections are going through Tor using the provided verification tools.
+- **Security Audits**: This library has not undergone security audits and should not be used for critical privacy needs without thorough testing.
 
 ## Future Plans
 
-- Add HTTPS support
 - Improve error handling and recovery
 - Add circuit isolation features
 - Add circuit rotation features
